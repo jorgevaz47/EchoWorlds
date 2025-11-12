@@ -5,17 +5,33 @@
 #include <SDL3/SDL_main.h>
 #include <SDL3_image/SDL_image.h>
 #include <vector>
+#include <array>
 #include <string>
+#include <glm/glm.hpp>
 
-#include "Animation.h"
+#include "GameObject.h"
 
 using namespace std;
+
+const size_t LAYER_IDX_LEVEL = 0;
+const size_t LAYER_IDX_CHARACTERS = 1;
 
 struct SDLState
 {
 	SDL_Window* window;
 	SDL_Renderer* renderer;
 	int width, height, logicalWidth, logicalHeight;
+};
+
+struct GameState
+{
+	std::array<std::vector<GameObject>, 2> layers;
+	int playerIndex;
+
+	GameState()
+	{
+		playerIndex = 0; // TODO: Change this when map is loaded
+	}
 };
 
 struct Resources
@@ -53,6 +69,7 @@ struct Resources
 
 bool initializeSDL(SDLState& sdlState);
 void cleanup(SDLState& sdlState);
+void drawObject(const SDLState& sdlState, GameState& gameState, GameObject& object, float deltaTime);
 
 int main(int argc, char* argv[])
 {
@@ -72,11 +89,19 @@ int main(int argc, char* argv[])
 	res.loadResources(sdlState);
 
 	// Setting up game data
+	GameState gameState;
+
+	// Creating player object
+	GameObject player;
+	player.type = ObjectType::PLAYER;
+	player.texture = res.idleTexture;
+	player.animations = res.playerAnimations;
+	player.currentAnimation = res.ANIM_PLAYER_IDLE;
+
+	gameState.layers[LAYER_IDX_CHARACTERS].push_back(player);
+
 	const bool* keys = SDL_GetKeyboardState(nullptr);
-	float playerX = 150.0f;
-	const float floor = sdlState.logicalHeight;
 	uint64_t prevTime = SDL_GetTicks();
-	bool flipHorizontal = false;
 
 	// Main loop flag
 	bool isRunning = true;
@@ -111,31 +136,18 @@ int main(int argc, char* argv[])
 			}
 		}
 
-		// Handle player movement
-		float moveAmount = 0;
-		if (keys[SDL_SCANCODE_A])
-		{
-			moveAmount -= 75.0f;
-			flipHorizontal = true;
-		}
-		if (keys[SDL_SCANCODE_D])
-		{
-			moveAmount += 75.0f;
-			flipHorizontal = false;
-		}
-		playerX += moveAmount * deltaTime;
-
-
 		// Perform drawing
 		SDL_SetRenderDrawColor(sdlState.renderer, 20, 10, 30, 255);
 		SDL_RenderClear(sdlState.renderer);
 
-		const float spriteSize = 32.0f;
-		SDL_FRect srcRect = { .x = 0, .y = 0, .w = spriteSize, .h = spriteSize };
-		SDL_FRect dstRect = { .x = playerX, .y = floor - spriteSize, .w = 32, .h = 32 };
-
-		SDL_RenderTextureRotated(sdlState.renderer, res.idleTexture, &srcRect, &dstRect, 0, nullptr,
-								 (flipHorizontal) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+		// Draw all game objects
+		for (auto& layer : gameState.layers)
+		{
+			for (GameObject& object : layer)
+			{
+				drawObject(sdlState, gameState, object, deltaTime);
+			}
+		}
 
 		// Swap buffers
 		SDL_RenderPresent(sdlState.renderer);
@@ -186,4 +198,15 @@ void cleanup(SDLState& sdlState)
 	SDL_DestroyWindow(sdlState.window);
 	SDL_DestroyRenderer(sdlState.renderer);
 	SDL_Quit();
+}
+
+void drawObject(const SDLState& sdlState, GameState& gameState, GameObject& object, float deltaTime)
+{
+	const float spriteSize = 32.0f;
+	SDL_FRect srcRect = { .x = 0, .y = 0, .w = spriteSize, .h = spriteSize };
+	SDL_FRect dstRect = { .x = object.position.x, .y = object.position.y, .w = 32, .h = 32 };
+
+	SDL_FlipMode flipHorizontal = object.direction == -1 ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+	SDL_RenderTextureRotated(sdlState.renderer, object.texture, &srcRect, &dstRect, 0, nullptr,
+							 flipHorizontal);
 }
