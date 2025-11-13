@@ -43,10 +43,11 @@ struct GameState
 struct Resources
 {
 	const int ANIM_PLAYER_IDLE = 0;
+	const int ANIM_PLAYER_RUNNING = 1;
 	std::vector<Animation> playerAnimations;
 
 	std::vector<SDL_Texture*> textures;
-	SDL_Texture* idleTexture;
+	SDL_Texture *idleTexture, *runningTexture;
 
 	SDL_Texture* loadTexture(SDL_Renderer* renderer, const std::string& filePath)
 	{
@@ -60,8 +61,10 @@ struct Resources
 	{
 		playerAnimations.resize(5);
 		playerAnimations[ANIM_PLAYER_IDLE] = Animation(8, 1.6f);
+		playerAnimations[ANIM_PLAYER_RUNNING] = Animation(4, 0.5f);
 
 		idleTexture = loadTexture(sdlState.renderer, "EchoWorlds/assets/Idle.png");
+		runningTexture = loadTexture(sdlState.renderer, "EchoWorlds/assets/Running.png");
 	}
 
 	void unloadResources()
@@ -101,6 +104,7 @@ int main(int argc, char* argv[])
 	// Creating player object
 	GameObject player;
 	player.type = ObjectType::PLAYER;
+	player.data.player = PlayerData();
 	player.texture = res.idleTexture;
 	player.animations = res.playerAnimations;
 	player.currentAnimation = res.ANIM_PLAYER_IDLE;
@@ -261,6 +265,25 @@ void update(const SDLState& sdlState, GameState& gameState, Resources& resource,
 				if (currentDirection)
 				{
 					object.data.player.state = PlayerState::RUNNING;
+					object.texture = resource.runningTexture;
+					object.currentAnimation = resource.ANIM_PLAYER_RUNNING;
+				}
+				else
+				{
+					// Decelerate to stop
+					if (object.velocity.x)
+					{
+						const float factor = object.velocity.x > 0 ? -1.5f : 1.5f;
+						float amount = factor * object.acceleration.x * deltaTime;
+						if (std::abs(amount) > std::abs(object.velocity.x))
+						{
+							object.velocity.x = 0;
+						}
+						else
+						{
+							object.velocity.x += amount;
+						}
+					}
 				}
 				break;
 			}
@@ -269,6 +292,8 @@ void update(const SDLState& sdlState, GameState& gameState, Resources& resource,
 				if (!currentDirection)
 				{
 					object.data.player.state = PlayerState::IDLE;
+					object.texture = resource.idleTexture;
+					object.currentAnimation = resource.ANIM_PLAYER_IDLE;
 				}
 				break;
 			}
