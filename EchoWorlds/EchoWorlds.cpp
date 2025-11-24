@@ -15,6 +15,9 @@ using namespace std;
 
 const size_t LAYER_IDX_LEVEL = 0;
 const size_t LAYER_IDX_CHARACTERS = 1;
+const int MAP_ROWS = 5;
+const int MAP_COLS = 50;
+const int TILE_SIZE = 32;
 
 struct SDLState
 {
@@ -47,7 +50,7 @@ struct Resources
 	std::vector<Animation> playerAnimations;
 
 	std::vector<SDL_Texture*> textures;
-	SDL_Texture *idleTexture, *runningTexture;
+	SDL_Texture *idleTexture, *runningTexture, *brickTexture, *grassTexture, *groundTexture, *panelTexture;
 
 	SDL_Texture* loadTexture(SDL_Renderer* renderer, const std::string& filePath)
 	{
@@ -65,6 +68,10 @@ struct Resources
 
 		idleTexture = loadTexture(sdlState.renderer, "EchoWorlds/assets/Idle.png");
 		runningTexture = loadTexture(sdlState.renderer, "EchoWorlds/assets/Running.png");
+		brickTexture = loadTexture(sdlState.renderer, "EchoWorlds/assets/tiles/Brick.png");
+		grassTexture = loadTexture(sdlState.renderer, "EchoWorlds/assets/tiles/Grass.png");
+		groundTexture = loadTexture(sdlState.renderer, "EchoWorlds/assets/tiles/Ground.png");
+		panelTexture = loadTexture(sdlState.renderer, "EchoWorlds/assets/tiles/Panel.png");
 	}
 
 	void unloadResources()
@@ -80,6 +87,9 @@ bool initializeSDL(SDLState& sdlState);
 void cleanup(SDLState& sdlState);
 void drawObject(const SDLState& sdlState, GameState& gameState, GameObject& object, float deltaTime);
 void update(const SDLState& sdlState, GameState& gameState, Resources& resource, GameObject& object, float deltaTime);
+void createTiles(const SDLState& sdlState, GameState& gameState, const Resources& resource);
+void collisionResponse(const SDLState& sdlState, GameState& gameState, Resources& resources, const SDL_FRect& rectA, const SDL_FRect& rectB, const SDL_FRect& rectC, GameObject& objectA, GameObject& objectB, float deltaTime);
+void checkCollision(const SDLState& sdlState, GameState& gameState, Resources& resources, GameObject& objectA, GameObject& objectB, float deltaTime);
 
 int main(int argc, char* argv[])
 {
@@ -100,19 +110,7 @@ int main(int argc, char* argv[])
 
 	// Setting up game data
 	GameState gameState;
-
-	// Creating player object
-	GameObject player;
-	player.type = ObjectType::PLAYER;
-	player.data.player = PlayerData();
-	player.texture = res.idleTexture;
-	player.animations = res.playerAnimations;
-	player.currentAnimation = res.ANIM_PLAYER_IDLE;
-	player.acceleration = glm::vec2(300, 0);
-	player.maxSpeedX = 100;
-
-	gameState.layers[LAYER_IDX_CHARACTERS].push_back(player);
-
+	createTiles(sdlState, gameState, res);
 	uint64_t prevTime = SDL_GetTicks();
 
 	// Main loop flag
@@ -242,6 +240,12 @@ void drawObject(const SDLState& sdlState, GameState& gameState, GameObject& obje
 
 void update(const SDLState& sdlState, GameState& gameState, Resources& resource, GameObject& object, float deltaTime)
 {
+	if (object.dynamic)
+	{
+		// Apply gravity
+		object.velocity += glm::vec2(0.0f, 500.0f) * deltaTime;
+	}
+	
 	if (object.type == ObjectType::PLAYER)
 	{
 		float currentDirection = 0;
@@ -305,8 +309,150 @@ void update(const SDLState& sdlState, GameState& gameState, Resources& resource,
 		{
 			object.velocity.x = currentDirection * object.maxSpeedX;
 		}
+	}
 
-		// Add velocity to position
-		object.position += object.velocity * deltaTime;
+	// Add velocity to position
+	object.position += object.velocity * deltaTime;
+
+	// Handle collisions 
+	// NOTE: Currently a simple n^2 collision detection is used. Look to optimize this later.
+	for (auto& layer : gameState.layers)
+	{
+		for (GameObject& otherObject : layer)
+		{
+			if (&object != &otherObject)
+			{
+				checkCollision(sdlState, gameState, resource, object, otherObject, deltaTime);
+			}
+		}
+	}
+}
+
+void collisionResponse(const SDLState& sdlState, GameState& gameState, Resources& resources, const SDL_FRect& rectA, const SDL_FRect& rectB, const SDL_FRect& rectC, GameObject& objectA, GameObject& objectB, float deltaTime)
+{
+	// Player collision handling
+	if (objectA.type == ObjectType::PLAYER)
+	{
+		switch (objectB.type)
+		{
+			case ObjectType::LEVEL:
+			{
+				if (rectC.w < rectC.h)
+				{
+					// Horizontal collision
+					if (objectA.velocity.x > 0)
+					{
+						objectA.position.x -= rectC.w;
+					}
+					else if (objectA.velocity.x < 0)
+					{
+						objectA.position.x += rectC.w;
+					}
+					objectA.velocity.x = 0;
+				}
+				else
+				{
+					// Vertical collision
+					if (objectA.velocity.y > 0)
+					{
+						objectA.position.y -= rectC.h;
+					}
+					else if (objectA.velocity.y < 0)
+					{
+						objectA.position.y += rectC.h;
+					}
+					objectA.velocity.y = 0;
+				}
+				break;
+			}
+		}
+	}
+}
+
+void checkCollision(const SDLState& sdlState, GameState& gameState, Resources& resources, GameObject& objectA, GameObject& objectB, float deltaTime)
+{
+	SDL_FRect rectA = {
+		.x = objectA.position.x,
+		.y = objectA.position.y,
+		.w = TILE_SIZE,
+		.h = TILE_SIZE
+	};
+
+	SDL_FRect rectB = {
+		.x = objectB.position.x,
+		.y = objectB.position.y,
+		.w = TILE_SIZE,
+		.h = TILE_SIZE
+	};
+
+	SDL_FRect intersection{ 0 };
+
+	if (SDL_GetRectIntersectionFloat(&rectA, &rectB, &intersection))
+	{
+		// Found intersection
+		collisionResponse(sdlState, gameState, resources, rectA, rectB, intersection, objectA, objectB, deltaTime);
+	}
+}
+
+void createTiles(const SDLState& sdlState, GameState& gameState, const Resources& resource)
+{
+	/*
+	*	1 - Ground
+	*	2 - Panel
+	*	3 - Enemy
+	*	4 - Player
+	*	5 - Grass
+	*	6 - Brick
+	*/
+
+	short map[MAP_ROWS][MAP_COLS] = {
+		4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	};
+
+	const auto createObject = [&sdlState](int r, int c, SDL_Texture* texture, ObjectType type)
+	{
+		GameObject gameObject;
+		gameObject.type = type;
+		gameObject.position = glm::vec2(c * TILE_SIZE, sdlState.logicalHeight - (MAP_ROWS - r) * TILE_SIZE);
+		gameObject.texture = texture;
+		return gameObject;
+	};
+
+	for (int r = 0; r < MAP_ROWS; ++r)
+	{
+		for (int c = 0; c < MAP_COLS; ++c)
+		{
+			switch (map[r][c])
+			{
+				case 1: // Ground tile
+				{
+					GameObject ground = createObject(r, c, resource.groundTexture, ObjectType::LEVEL);
+					gameState.layers[LAYER_IDX_LEVEL].push_back(ground);
+					break;
+				}
+				case 2: // Panel tile
+				{
+					GameObject panel = createObject(r, c, resource.panelTexture, ObjectType::LEVEL);
+					gameState.layers[LAYER_IDX_LEVEL].push_back(panel);
+					break;
+				}
+				case 4: // Player tile
+				{
+					GameObject player = createObject(r, c, resource.idleTexture, ObjectType::PLAYER);
+					player.data.player = PlayerData();
+					player.animations = resource.playerAnimations;
+					player.currentAnimation = resource.ANIM_PLAYER_IDLE;
+					player.acceleration = glm::vec2(300, 0);
+					player.maxSpeedX = 100;
+					player.dynamic = true;
+					gameState.layers[LAYER_IDX_CHARACTERS].push_back(player);
+					break;
+				}	
+			}
+		}
 	}
 }
