@@ -8,6 +8,7 @@
 #include <array>
 #include <string>
 #include <glm/glm.hpp>
+#include <format>
 
 #include "GameObject.h"
 
@@ -39,7 +40,12 @@ struct GameState
 
 	GameState()
 	{
-		playerIndex = 0; // TODO: Change this when map is loaded
+		playerIndex = -1; // TODO: Change this when map is loaded
+	}
+
+	GameObject& getPlayer()
+	{
+		return layers[LAYER_IDX_CHARACTERS][playerIndex];
 	}
 };
 
@@ -90,6 +96,7 @@ void update(const SDLState& sdlState, GameState& gameState, Resources& resource,
 void createTiles(const SDLState& sdlState, GameState& gameState, const Resources& resource);
 void collisionResponse(const SDLState& sdlState, GameState& gameState, Resources& resources, const SDL_FRect& rectA, const SDL_FRect& rectB, const SDL_FRect& rectC, GameObject& objectA, GameObject& objectB, float deltaTime);
 void checkCollision(const SDLState& sdlState, GameState& gameState, Resources& resources, GameObject& objectA, GameObject& objectB, float deltaTime);
+void handleKeyInput(const SDLState& sdlState, GameState& gameState, GameObject& object, SDL_Scancode key, bool keyDown);
 
 int main(int argc, char* argv[])
 {
@@ -143,6 +150,16 @@ int main(int argc, char* argv[])
 					sdlState.height = event.window.data2;
 					break;
 				}
+				case SDL_EVENT_KEY_DOWN:
+				{
+					handleKeyInput(sdlState, gameState, gameState.getPlayer(), event.key.scancode, true);
+					break;
+				}
+				case SDL_EVENT_KEY_UP:
+				{
+					handleKeyInput(sdlState, gameState, gameState.getPlayer(), event.key.scancode, false);
+					break;
+				}
 			}
 		}
 
@@ -172,6 +189,10 @@ int main(int argc, char* argv[])
 				drawObject(sdlState, gameState, object, deltaTime);
 			}
 		}
+
+		// Display debug info
+		SDL_SetRenderDrawColor(sdlState.renderer, 255, 255, 255, 255);
+		SDL_RenderDebugText(sdlState.renderer, 5, 5, std::format("State: {}", static_cast<int>(gameState.getPlayer().data.player.state)).c_str());
 
 		// Swap buffers
 		SDL_RenderPresent(sdlState.renderer);
@@ -211,6 +232,7 @@ bool initializeSDL(SDLState& sdlState)
 		cleanup(sdlState);
 		return false;
 	}
+	SDL_SetRenderVSync(sdlState.renderer, 1);
 
 	// Configuring the presentation of the game
 	SDL_SetRenderLogicalPresentation(sdlState.renderer, sdlState.logicalWidth, sdlState.logicalHeight, SDL_LOGICAL_PRESENTATION_LETTERBOX);
@@ -269,8 +291,6 @@ void update(const SDLState& sdlState, GameState& gameState, Resources& resource,
 				if (currentDirection)
 				{
 					object.data.player.state = PlayerState::RUNNING;
-					object.texture = resource.runningTexture;
-					object.currentAnimation = resource.ANIM_PLAYER_RUNNING;
 				}
 				else
 				{
@@ -289,6 +309,8 @@ void update(const SDLState& sdlState, GameState& gameState, Resources& resource,
 						}
 					}
 				}
+				object.texture = resource.idleTexture;
+				object.currentAnimation = resource.ANIM_PLAYER_IDLE;
 				break;
 			}
 			case PlayerState::RUNNING:
@@ -296,9 +318,15 @@ void update(const SDLState& sdlState, GameState& gameState, Resources& resource,
 				if (!currentDirection)
 				{
 					object.data.player.state = PlayerState::IDLE;
-					object.texture = resource.idleTexture;
-					object.currentAnimation = resource.ANIM_PLAYER_IDLE;
 				}
+				object.texture = resource.runningTexture;
+				object.currentAnimation = resource.ANIM_PLAYER_RUNNING;
+				break;
+			}
+			case PlayerState::JUMPING:
+			{
+				object.texture = resource.runningTexture;
+				object.currentAnimation = resource.ANIM_PLAYER_RUNNING;
 				break;
 			}
 		}
@@ -316,6 +344,7 @@ void update(const SDLState& sdlState, GameState& gameState, Resources& resource,
 
 	// Handle collisions 
 	// NOTE: Currently a simple n^2 collision detection is used. Look to optimize this later.
+	bool foundGround = false;
 	for (auto& layer : gameState.layers)
 	{
 		for (GameObject& otherObject : layer)
@@ -323,7 +352,37 @@ void update(const SDLState& sdlState, GameState& gameState, Resources& resource,
 			if (&object != &otherObject)
 			{
 				checkCollision(sdlState, gameState, resource, object, otherObject, deltaTime);
+
+				// Check if object is grounded
+				SDL_FRect sensorRect = {
+					.x = object.position.x + object.collider.x,
+					.y = object.position.y + object.collider.y + object.collider.h,
+					.w = object.collider.w,
+					.h = 1.0f
+				};
+
+				SDL_FRect otherRect = {
+					.x = otherObject.position.x + otherObject.collider.x,
+					.y = otherObject.position.y + otherObject.collider.y,
+					.w = otherObject.collider.w,
+					.h = otherObject.collider.h
+				};
+
+				if (SDL_HasRectIntersectionFloat(&sensorRect, &otherRect))
+				{
+					foundGround = true;
+				}
 			}
+		}
+	}
+
+	if (object.grounded != foundGround)
+	{
+		object.grounded = foundGround;
+		if (foundGround && object.type == ObjectType::PLAYER)
+		{
+			// Landed
+			object.data.player.state = PlayerState::RUNNING;
 		}
 	}
 }
@@ -452,8 +511,39 @@ void createTiles(const SDLState& sdlState, GameState& gameState, const Resources
 					player.dynamic = true;
 					player.collider = SDL_FRect{ .x = 11, .y = 6, .w = 10, .h = 26 };
 					gameState.layers[LAYER_IDX_CHARACTERS].push_back(player);
+					gameState.playerIndex = gameState.layers[LAYER_IDX_CHARACTERS].size() - 1;
 					break;
 				}	
+			}
+		}
+	}
+	assert(gameState.playerIndex != -1);
+}
+
+void handleKeyInput(const SDLState& sdlState, GameState& gameState, GameObject& object, SDL_Scancode key, bool keyDown)
+{
+	const float JUMP_FORCE = -200.0f;
+	if (object.type == ObjectType::PLAYER)
+	{
+		switch (object.data.player.state)
+		{
+			case PlayerState::IDLE:
+			{
+				if (key == SDL_SCANCODE_K && keyDown)
+				{
+					object.data.player.state = PlayerState::JUMPING;
+					object.velocity.y += JUMP_FORCE;
+				}
+				break;
+			}
+			case PlayerState::RUNNING:
+			{
+				if (key == SDL_SCANCODE_K && keyDown)
+				{
+					object.data.player.state = PlayerState::JUMPING;
+					object.velocity.y += JUMP_FORCE;
+				}
+				break;
 			}
 		}
 	}
